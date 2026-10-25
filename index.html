@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Serial Cipher</title>
+  <meta name="description" content="Encode and decode text with your Mac's serial number. Runs entirely in your browser.">
+  <style>
+    body {
+      margin: 72px 0 40px;
+      font-family: Georgia, "Times New Roman", Times, serif;
+      color: #000;
+      background: #fff;
+    }
+    .layout { max-width: 640px; margin: 0 auto; padding: 0 20px; }
+    h1 { font-size: 3em; margin: 0 0 4px; }
+    h2 { font-size: 1.1em; margin: 32px 0 4px; }
+    hr { margin: 4px 0 12px; border: none; border-top: 1px solid #000; }
+    p { margin: 0 0 12px; }
+    .nav { font-size: 0.95em; }
+    a, a:visited { color: #000; }
+    a.on { font-weight: bold; text-decoration: none; }
+    textarea, input {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      font: inherit;
+      color: #000;
+      background: #fff;
+      border: 1px solid #000;
+      border-radius: 0;
+      padding: 8px;
+      margin-bottom: 4px;
+    }
+    textarea { height: 120px; resize: vertical; }
+    textarea:focus, input:focus { outline: 2px solid #000; outline-offset: 1px; }
+    textarea[readonly] { background: #f4f4f4; }
+    .note { font-size: 0.9em; margin-top: 4px; }
+    [hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <h1>Serial Cipher</h1>
+    <p class="nav"><a href="#encode" id="tab-encode">Encode</a> · <a href="#decode" id="tab-decode">Decode</a></p>
+
+    <section id="encode">
+      <h2>Text</h2>
+      <hr>
+      <textarea id="enc-in" placeholder="Type your message" spellcheck="false"></textarea>
+
+      <h2>Serial number</h2>
+      <hr>
+      <input id="enc-serial" class="serial" placeholder="Mac serial number" autocomplete="off" spellcheck="false">
+      <p class="note">Apple menu, About This Mac. Type it in exactly as shown.</p>
+
+      <h2>Encoded</h2>
+      <hr>
+      <textarea id="enc-out" readonly spellcheck="false"></textarea>
+    </section>
+
+    <section id="decode" hidden>
+      <h2>Encoded</h2>
+      <hr>
+      <textarea id="dec-in" placeholder="Paste encoded text" spellcheck="false"></textarea>
+
+      <h2>Serial number</h2>
+      <hr>
+      <input id="dec-serial" class="serial" placeholder="Mac serial number" autocomplete="off" spellcheck="false">
+      <p class="note">Apple menu, About This Mac. Type it in exactly as shown.</p>
+
+      <h2>Text</h2>
+      <hr>
+      <textarea id="dec-out" readonly spellcheck="false"></textarea>
+    </section>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const enc = new TextEncoder(), dec = new TextDecoder();
+
+    async function key(serial, salt) {
+      const base = await crypto.subtle.importKey("raw", enc.encode(serial.trim().toUpperCase()), "PBKDF2", false, ["deriveKey"]);
+      return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
+        base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+      );
+    }
+
+    const toB64 = b => btoa(String.fromCharCode(...b));
+    const fromB64 = s => Uint8Array.from(atob(s.replace(/\s+/g, "")), c => c.charCodeAt(0));
+
+    async function encode(text, serial) {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(serial, salt), enc.encode(text)));
+      const out = new Uint8Array(28 + ct.length);
+      out.set(salt); out.set(iv, 16); out.set(ct, 28);
+      return toB64(out);
+    }
+
+    async function decode(text, serial) {
+      const data = fromB64(text);
+      const pt = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: data.slice(16, 28) },
+        await key(serial, data.slice(0, 16)), data.slice(28)
+      );
+      return dec.decode(pt);
+    }
+
+    // Each run is tagged so a slow earlier run can't overwrite a newer result.
+    let run = 0;
+    async function update() {
+      const id = ++run;
+      let encOut = "", decOut = "";
+      const serial = $("enc-serial").value;
+      if ($("enc-in").value && serial.trim()) encOut = await encode($("enc-in").value, serial);
+      if ($("dec-in").value.trim() && serial.trim()) {
+        try { decOut = await decode($("dec-in").value, serial); }
+        catch { decOut = "Wrong serial number, or the text was changed."; }
+      }
+      if (id !== run) return;
+      $("enc-out").value = encOut;
+      $("dec-out").value = decOut;
+    }
+
+    // The serial number box is shared between both screens.
+    for (const id of ["enc-serial", "dec-serial"]) {
+      $(id).addEventListener("input", e => {
+        $("enc-serial").value = $("dec-serial").value = e.target.value;
+        update();
+      });
+    }
+    for (const id of ["enc-in", "dec-in"]) $(id).addEventListener("input", update);
+
+    function show() {
+      const mode = location.hash === "#decode" ? "decode" : "encode";
+      for (const m of ["encode", "decode"]) {
+        $(m).hidden = m !== mode;
+        $("tab-" + m).classList.toggle("on", m === mode);
+      }
+    }
+    addEventListener("hashchange", show);
+    show();
+  </script>
+</body>
+</html>
